@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CUCM Jabber Device Builder</title>
+<style>
+  :root{--navy:#1F3864;--blue:#DCE6F5;--bg:#f6f8fb;--ink:#1b2430;--line:#cfd8e6;--ok:#17703a;--bad:#b3261e;--warn:#8a5a00}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif}
+  header{background:var(--navy);color:#fff;padding:14px 22px}
+  header h1{margin:0;font-size:18px} header p{margin:2px 0 0;opacity:.8;font-size:12px}
+  main{max-width:980px;margin:18px auto;padding:0 16px;display:grid;gap:14px}
+  section{background:#fff;border:1px solid var(--line);border-radius:8px;padding:14px 16px}
+  h2{margin:0 0 10px;font-size:14px;color:var(--navy)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}
+  label{display:block;font-size:12px;color:#44526a;margin-bottom:3px}
+  input[type=text],input[type=password]{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:5px;font:inherit}
+  button{background:var(--navy);color:#fff;border:0;border-radius:5px;padding:8px 14px;font:inherit;cursor:pointer}
+  button.secondary{background:#fff;color:var(--navy);border:1px solid var(--navy)}
+  button:disabled{opacity:.5;cursor:wait}
+  .row{display:flex;gap:10px;align-items:end;flex-wrap:wrap}
+  .row>div{flex:1;min-width:200px}
+  .checks{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;align-items:center}
+  .checks label{display:inline-flex;gap:5px;align-items:center;font-size:13px;color:var(--ink);margin:0}
+  table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px}
+  th{background:var(--navy);color:#fff;text-align:left;padding:6px 8px;font-weight:600}
+  td{padding:6px 8px;border-bottom:1px solid var(--line)}
+  tbody tr:nth-child(even){background:var(--blue)} tbody tr{cursor:pointer}
+  tbody tr.sel{outline:2px solid var(--navy);outline-offset:-2px;background:#bcd0ee}
+  #preview{margin-top:10px;font-family:ui-monospace,Consolas,monospace;color:var(--navy);min-height:1.4em}
+  #log{background:#0f1722;color:#d6e2f2;border-radius:6px;padding:10px;height:220px;overflow:auto;font:12px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap}
+  .ok{color:#6fdc98}.bad{color:#ff8a80}.warn{color:#ffd166}
+  .note{font-size:12px;color:#5b6b83;margin-top:6px}
+</style>
+</head>
+<body>
+<header>
+  <h1>CUCM Jabber Device Builder</h1>
+  <p>Clone a device's configuration into CSF / BOT / TCT / TAB devices for an end user</p>
+</header>
+<main>
+
+<section>
+  <h2>1. CUCM login (AXL)</h2>
+  <div class="grid">
+    <div><label for="host">Publisher host / IP</label><input type="text" id="host" autocomplete="off"></div>
+    <div><label for="user">AXL username</label><input type="text" id="user" autocomplete="off"></div>
+    <div><label for="pass">Password</label><input type="password" id="pass" autocomplete="off"></div>
+    <div><label for="ver">AXL version</label><input type="text" id="ver" value="14.0"></div>
+    <div><label for="proxy">Local proxy URL</label><input type="text" id="proxy" value=""
+         placeholder="blank = same page (http://127.0.0.1:8080)"></div>
+  </div>
+  <div class="checks">
+    <label><input type="checkbox" id="verify"> Verify CUCM TLS certificate</label>
+    <button id="btnLogin" class="secondary">Test login</button>
+  </div>
+  <div class="note">Credentials stay in this tab and are sent only to the local proxy, which forwards them to CUCM.</div>
+</section>
+
+<section>
+  <h2>2. Find the source device (configuration to clone)</h2>
+  <div class="row">
+    <div><label for="search">Device name (% is a wildcard)</label><input type="text" id="search" placeholder="e.g. SEP%  or  CSFJSMITH"></div>
+    <button id="btnSearch">Search</button>
+  </div>
+  <table>
+    <thead><tr><th>Name</th><th>Model</th><th>Description</th></tr></thead>
+    <tbody id="results"><tr><td colspan="3" style="color:#7a889e">No search yet</td></tr></tbody>
+  </table>
+</section>
+
+<section>
+  <h2>3. End user and devices to create</h2>
+  <div class="row">
+    <div><label for="enduser">End user username</label><input type="text" id="enduser" placeholder="amorales" autocomplete="off"></div>
+  </div>
+  <div class="checks" id="typeChecks"></div>
+  <div class="checks">
+    <label><input type="checkbox" id="copyLines" checked> Copy line appearances from source</label>
+    <label><input type="checkbox" id="setOwner" checked> Set owner user ID to the end user (must exist)</label>
+  </div>
+  <div id="preview"></div>
+  <div class="checks"><button id="btnCreate">Create devices</button></div>
+</section>
+
+<section>
+  <h2>Log</h2>
+  <div id="log"></div>
+</section>
+
+</main>
+<script>
+"use strict";
+const MAX_NAME_LEN = 15, PREFIX_LEN = 3, MAX_USER_PART = MAX_NAME_LEN - PREFIX_LEN; // 12
+
+const DEVICE_TYPES = {
+  CSF: {product: "Cisco Unified Client Services Framework",
+        sec: "Cisco Unified Client Services Framework - Standard SIP Non-Secure Profile",
+        sip: "Standard SIP Profile for Cisco VCS"},
+  BOT: {product: "Cisco Dual Mode for Android",
+        sec: "Cisco Dual Mode for Android - Standard SIP Non-Secure Profile",
+        sip: "Standard SIP Profile for Mobile Device"},
+  TCT: {product: "Cisco Dual Mode for iPhone",
+        sec: "Cisco Dual Mode for iPhone - Standard SIP Non-Secure Profile",
+        sip: "Standard SIP Profile for Mobile Device"},
+  TAB: {product: "Cisco Jabber for Tablet",
+        sec: "Cisco Jabber for Tablet - Standard SIP Non-Secure Profile",
+        sip: "Standard SIP Profile for Mobile Device"},
+};
+
+// Simple settings copied from the source device, in AXL schema order.
+const COPY_FIELDS = [
+  "callingSearchSpaceName","devicePoolName","commonDeviceConfigName","commonPhoneConfigName",
+  "networkLocation","locationName","mediaResourceListName","networkHoldMohAudioSourceId",
+  "userHoldMohAudioSourceId","automatedAlternateRoutingCssName","aarNeighborhoodName",
+  "traceFlag","mlppIndicationStatus","preemption","useTrustedRelayPoint","retryVideoCallAsAudio",
+  "cgpnTransformationCssName","useDevicePoolCgpnTransformCss","geoLocationName",
+  "subscribeCallingSearchSpaceName","rerouteCallingSearchSpaceName",
+];
+const DEFAULTS = {traceFlag:"false", mlppIndicationStatus:"Default", preemption:"Default", useTrustedRelayPoint:"Default"};
+
+const $ = id => document.getElementById(id);
+let selectedSource = null;
+
+// ---------- helpers ----------
+function log(msg, cls) {
+  const d = document.createElement("div");
+  if (cls) d.className = cls;
+  d.textContent = msg;
+  $("log").appendChild(d);
+  $("log").scrollTop = $("log").scrollHeight;
+}
+const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&apos;");
+const x = (tag, val) => `<${tag}>${esc(val)}</${tag}>`;
+
+function buildDeviceName(prefix, username) {
+  const clean = username.toUpperCase().replace(/[^A-Z0-9._-]/g, "");
+  return {name: prefix + clean.slice(0, MAX_USER_PART), truncated: clean.length > MAX_USER_PART};
+}
+
+// namespace-agnostic DOM helpers
+const kids = (el, name) => el ? [...el.children].filter(c => c.localName === name) : [];
+const kid  = (el, name) => kids(el, name)[0] || null;
+function txt(el, name) {
+  const c = kid(el, name);
+  const t = c && c.textContent ? c.textContent.trim() : "";
+  return t || null;
+}
+const all = (doc, name) => [...doc.getElementsByTagNameNS("*", name)];
+
+// ---------- AXL via local proxy ----------
+class AxlError extends Error {}
+
+async function axl(method, bodyXml) {
+  const host = $("host").value.trim(), user = $("user").value.trim(), pass = $("pass").value;
+  const ver = $("ver").value.trim() || "14.0";
+  if (!host || !user || !pass) throw new AxlError("Enter host, username and password.");
+  const base = ($("proxy").value.trim() || "").replace(/\/$/, "");
+  const env = '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" ' +
+    `xmlns:ns="http://www.cisco.com/AXL/API/${esc(ver)}"><soapenv:Header/><soapenv:Body>` +
+    `<ns:${method}>${bodyXml || ""}</ns:${method}></soapenv:Body></soapenv:Envelope>`;
+  let resp;
+  try {
+    resp = await fetch(base + "/proxy", {
+      method: "POST",
+      headers: {
+        "Content-Type": "text/xml",
+        "X-CUCM-Host": host,
+        "X-AXL-Version": ver,
+        "X-CUCM-Verify": $("verify").checked ? "1" : "0",
+        "Authorization": "Basic " + btoa(unescape(encodeURIComponent(user + ":" + pass))),
+      },
+      body: env,
+    });
+  } catch (e) {
+    throw new AxlError("Cannot reach the local proxy. Is cucm_proxy.py running? (" + e.message + ")");
+  }
+  const text = await resp.text();
+  if (resp.status === 401) throw new AxlError("Authentication failed (HTTP 401).");
+  if (resp.status === 502 || resp.status === 400 || resp.status === 403) throw new AxlError(text);
+  const doc = new DOMParser().parseFromString(text, "text/xml");
+  if (doc.querySelector("parsererror")) throw new AxlError(`HTTP ${resp.status}: unreadable response.`);
+  const fault = all(doc, "faultstring")[0];
+  if (fault) throw new AxlError(fault.textContent);
+  if (!resp.ok) throw new AxlError("HTTP " + resp.status);
+  return doc;
+}
+
+// ---------- addPhone builder ----------
+function buildAddPhone(name, t, secProfile, sipProfile, src, owner, copyLines, desc) {
+  const parts = [x("name", name), x("description", desc), x("product", t.product),
+                 x("class", "Phone"), x("protocol", "SIP"), x("protocolSide", "User")];
+  for (const f of COPY_FIELDS) {
+    const v = txt(src, f) || DEFAULTS[f];
+    if (v) parts.push(x(f, v));
+  }
+  parts.push(x("securityProfileName", secProfile), x("sipProfileName", sipProfile));
+  if (owner) parts.push(x("ownerUserName", owner));
+  if (copyLines) {
+    const lines = [];
+    for (const ln of kids(kid(src, "lines"), "line")) {
+      const idx = txt(ln, "index"), dirn = kid(ln, "dirn");
+      const pattern = dirn ? txt(dirn, "pattern") : null;
+      if (!idx || !pattern) continue;
+      const part = txt(dirn, "routePartitionName");
+      let body = x("index", idx);
+      for (const tg of ["label","display","displayAscii","e164Mask"]) {
+        const v = txt(ln, tg);
+        if (v) body += x(tg, v);
+      }
+      body += "<dirn>" + x("pattern", pattern) + (part ? x("routePartitionName", part) : "") + "</dirn>";
+      lines.push(`<line>${body}</line>`);
+    }
+    if (lines.length) parts.push(`<lines>${lines.join("")}</lines>`);
+  }
+  return `<phone>${parts.join("")}</phone>`;
+}
+
+// ---------- UI ----------
+function refreshPreview() {
+  const u = $("enduser").value.trim();
+  if (!u) { $("preview").textContent = ""; return; }
+  const names = []; let trunc = false;
+  for (const k of Object.keys(DEVICE_TYPES)) {
+    if ($("t_" + k).checked) { const r = buildDeviceName(k, u); names.push(r.name); trunc ||= r.truncated; }
+  }
+  $("preview").textContent = names.join(", ") +
+    (trunc ? `   (username truncated to ${MAX_USER_PART} chars; ${MAX_NAME_LEN}-char device name limit)` : "");
+}
+
+function busy(btn, on) { btn.disabled = on; }
+
+async function testLogin() {
+  const b = $("btnLogin"); busy(b, true);
+  try {
+    const doc = await axl("listProcessNode",
+      "<searchCriteria><name>%</name></searchCriteria><returnedTags><name/></returnedTags>");
+    const nodes = all(doc, "name").map(n => n.textContent).filter(Boolean);
+    log("Login OK. Nodes: " + nodes.join(", "), "ok");
+  } catch (e) { log("ERROR: " + e.message, "bad"); }
+  busy(b, false);
+}
+
+async function search() {
+  let term = $("search").value.trim();
+  if (!term) return log("Enter a device name to search.", "warn");
+  if (!term.includes("%")) term += "%";
+  const b = $("btnSearch"); busy(b, true);
+  try {
+    const doc = await axl("listPhone",
+      `<searchCriteria><name>${esc(term)}</name></searchCriteria>` +
+      "<returnedTags><name/><model/><description/></returnedTags>");
+    const rows = all(doc, "phone").map(p => ({name: txt(p,"name")||"", model: txt(p,"model")||"", desc: txt(p,"description")||""}));
+    const tb = $("results"); tb.innerHTML = ""; selectedSource = null;
+    if (!rows.length) tb.innerHTML = '<tr><td colspan="3" style="color:#7a889e">No devices found</td></tr>';
+    for (const r of rows) {
+      const tr = document.createElement("tr");
+      for (const v of [r.name, r.model, r.desc]) { const td = document.createElement("td"); td.textContent = v; tr.appendChild(td); }
+      tr.onclick = () => {
+        tb.querySelectorAll("tr").forEach(t => t.classList.remove("sel"));
+        tr.classList.add("sel"); selectedSource = r.name;
+      };
+      tb.appendChild(tr);
+    }
+    log(`Search '${term}': ${rows.length} device(s) found.`);
+  } catch (e) { log("ERROR: " + e.message, "bad"); }
+  busy(b, false);
+}
+
+async function create() {
+  if (!selectedSource) return log("Select a source device from the search results.", "warn");
+  const user = $("enduser").value.trim();
+  if (!user) return log("Enter the end user's username.", "warn");
+  const wanted = Object.keys(DEVICE_TYPES).filter(k => $("t_" + k).checked);
+  if (!wanted.length) return log("Select at least one device type.", "warn");
+  const names = wanted.map(k => [k, buildDeviceName(k, user)]);
+  if (!confirm("Create these devices on CUCM?\n\n" + names.map(n => n[1].name).join("\n"))) return;
+
+  const b = $("btnCreate"); busy(b, true);
+  try {
+    log(`Reading source device ${selectedSource} ...`);
+    const sdoc = await axl("getPhone", `<name>${esc(selectedSource)}</name>`);
+    const src = all(sdoc, "phone")[0];
+    if (!src) throw new AxlError("Source device not found.");
+    let owner = null;
+    if ($("setOwner").checked) {
+      try { await axl("getUser", `<userid>${esc(user)}</userid><returnedTags><userid/></returnedTags>`); owner = user; }
+      catch { log(`WARNING: end user '${user}' not found in CUCM - owner will be left blank.`, "warn"); }
+    }
+    const srcProduct = txt(src, "product");
+    for (const [prefix, r] of names) {
+      const t = DEVICE_TYPES[prefix];
+      let sec = t.sec, sip = t.sip;
+      if (srcProduct === t.product) { sec = txt(src, "securityProfileName") || sec; sip = txt(src, "sipProfileName") || sip; }
+      if (r.truncated) log(`NOTE: ${r.name} - username truncated to ${MAX_USER_PART} characters.`, "warn");
+      const desc = `${user} - ${prefix} (cloned from ${selectedSource})`;
+      try {
+        await axl("addPhone", buildAddPhone(r.name, t, sec, sip, src, owner, $("copyLines").checked, desc));
+        log(`CREATED  ${r.name}  [${t.product}]`, "ok");
+      } catch (e) { log(`FAILED   ${r.name}: ${e.message}`, "bad"); }
+    }
+    log("Done.");
+  } catch (e) { log("ERROR: " + e.message, "bad"); }
+  busy(b, false);
+}
+
+// init
+for (const k of Object.keys(DEVICE_TYPES)) {
+  const l = document.createElement("label");
+  l.innerHTML = `<input type="checkbox" id="t_${k}" checked> ${k}`;
+  $("typeChecks").appendChild(l);
+  l.querySelector("input").onchange = refreshPreview;
+}
+$("enduser").addEventListener("input", refreshPreview);
+$("btnLogin").onclick = testLogin;
+$("btnSearch").onclick = search;
+$("btnCreate").onclick = create;
+$("search").addEventListener("keydown", e => { if (e.key === "Enter") search(); });
+if (location.protocol === "file:")
+  log("Opened from disk: run cucm_proxy.py and set 'Local proxy URL' to http://127.0.0.1:8080, or just browse to that address.", "warn");
+</script>
+</body>
+</html>
