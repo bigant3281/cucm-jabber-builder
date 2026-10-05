@@ -37,6 +37,8 @@ Chrome/Edge/Firefox permit an HTTPS page to call `127.0.0.1`. The proxy answers 
 - Defaults for security/SIP profile names may differ on your cluster; if CUCM reports a profile not
   found, edit `DEVICE_TYPES` at the top of the script in `index.html`. If the source device is the same
   model as the one being created, its own profiles are reused.
-- Owner user ID is set, but the device is not added to the user's controlled devices, and no primary
-  extension is set.
+- Two separate fields: **End user username** builds the device names only; **Owner ID** sets both the
+  Owner User ID and the Digest User on every device created. Owner ID must be an existing CUCM end
+  user; if blank or not found, both are left unset. The device is not added to the user's controlled
+  devices, and no primary extension is set.
 - Don't publish anything containing credentials. The page never stores them.

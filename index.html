@@ -73,13 +73,16 @@
 <section>
   <h2>3. End user and devices to create</h2>
   <div class="row">
-    <div><label for="enduser">End user username</label><input type="text" id="enduser" placeholder="amorales" autocomplete="off"></div>
+    <div><label for="enduser">End user username <span style="color:#7a889e">(used to create the device names)</span></label>
+      <input type="text" id="enduser" placeholder="amorales" autocomplete="off"></div>
+    <div><label for="ownerid">Owner ID <span style="color:#7a889e">(sets Owner User ID and Digest User)</span></label>
+      <input type="text" id="ownerid" placeholder="amorales" autocomplete="off"></div>
   </div>
   <div class="checks" id="typeChecks"></div>
   <div class="checks">
     <label><input type="checkbox" id="copyLines" checked> Copy line appearances from source</label>
-    <label><input type="checkbox" id="setOwner" checked> Set owner user ID to the end user (must exist)</label>
   </div>
+  <div class="note">The Owner ID must be an existing end user in CUCM. If it is left blank or not found, Owner User ID and Digest User are left unset.</div>
   <div id="preview"></div>
   <div class="checks"><button id="btnCreate">Create devices</button></div>
 </section>
@@ -196,7 +199,7 @@ function buildAddPhone(name, t, secProfile, sipProfile, src, owner, copyLines, d
     if (v) parts.push(x(f, v));
   }
   parts.push(x("securityProfileName", secProfile), x("sipProfileName", sipProfile));
-  if (owner) parts.push(x("ownerUserName", owner));
+  if (owner) parts.push(x("ownerUserName", owner), x("digestUser", owner));
   if (copyLines) {
     const lines = [];
     for (const ln of kids(kid(src, "lines"), "line")) {
@@ -284,9 +287,16 @@ async function create() {
     const src = all(sdoc, "phone")[0];
     if (!src) throw new AxlError("Source device not found.");
     let owner = null;
-    if ($("setOwner").checked) {
-      try { await axl("getUser", `<userid>${esc(user)}</userid><returnedTags><userid/></returnedTags>`); owner = user; }
-      catch { log(`WARNING: end user '${user}' not found in CUCM - owner will be left blank.`, "warn"); }
+    const ownerId = $("ownerid").value.trim();
+    if (!ownerId) {
+      log("NOTE: Owner ID is blank - Owner User ID and Digest User will be left unset.", "warn");
+    } else {
+      try {
+        await axl("getUser", `<userid>${esc(ownerId)}</userid><returnedTags><userid/></returnedTags>`);
+        owner = ownerId;
+      } catch (e) {
+        log(`WARNING: Owner ID '${ownerId}' not found in CUCM (${e.message}) - Owner User ID and Digest User will be left unset.`, "warn");
+      }
     }
     const srcProduct = txt(src, "product");
     for (const [prefix, r] of names) {
